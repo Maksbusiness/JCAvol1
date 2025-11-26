@@ -197,3 +197,4 @@ class PosterClient:
                 })
         
         return pd.DataFrame(flattened_rows)
+
