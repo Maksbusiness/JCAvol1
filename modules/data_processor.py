@@ -1,4 +1,82 @@
+import pandas as pd
 import streamlit as st
+from typing import Optional
+
+class DataProcessor:
+    """
+    Клас для обробки та агрегації даних для дашборду.
+    """
+
+    def process_top_products(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Визначає топ-10 товарів за сумою продажів.
+        Потребує наявності колонки 'products' (include_products=1 в API).
+        """
+        # Перевірка наявності даних про товари
+        if 'products' not in df.columns:
+            return pd.DataFrame()
+
+        try:
+            # 1. "Вибухаємо" список продуктів: кожен товар стає окремим рядком
+            # Poster повертає products як список словників всередині комірки
+            df_exploded = df.explode('products')
+            
+            # Видаляємо рядки, де немає товарів (NaN)
+            df_exploded = df_exploded.dropna(subset=['products'])
+            
+            if df_exploded.empty:
+                return pd.DataFrame()
+
+            # 2. Витягуємо дані зі словників у колонці 'products'
+            # Нормалізація JSON структури
+            products_data = pd.json_normalize(df_exploded['products'])
+            
+            # 3. Вибираємо потрібні колонки та приводимо типи
+            # Зазвичай Poster повертає: name, count, payed_sum (або price)
+            # payed_sum часто в копійках, тому ділимо на 100
+            products_data['payed_sum'] = pd.to_numeric(products_data['payed_sum'], errors='coerce') / 100
+            products_data['count'] = pd.to_numeric(products_data['count'], errors='coerce')
+            
+            # 4. Групуємо за назвою
+            top_products = products_data.groupby('name')[['count', 'payed_sum']].sum()
+            
+            # 5. Сортуємо та беремо топ-10
+            top_products = top_products.sort_values(by='payed_sum', ascending=False).head(10)
+            
+            return top_products
+
+        except Exception as e:
+            st.warning(f"Помилка при обробці товарів: {e}")
+            return pd.DataFrame()
+
+    def process_hourly_sales(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Агрегує суму продажів по годинах доби.
+        """
+        try:
+            # Створюємо копію, щоб не змінювати оригінал
+            temp_df = df.copy()
+
+            # Конвертуємо дату закриття (Posters v3 date_close: 'YYYY-MM-DD HH:MM:SS')
+            temp_df['date_close'] = pd.to_datetime(temp_df['date_close'])
+            
+            # Витягуємо годину (0-23)
+            temp_df['hour'] = temp_df['date_close'].dt.hour
+            
+            # Визначаємо колонку з сумою (payed_sum або sum)
+            sum_col = 'payed_sum' if 'payed_sum' in temp_df.columns else 'sum'
+            
+            # Конвертуємо в числа та ділимо на 100 (з копійок у гривні)
+            temp_df[sum_col] = pd.to_numeric(temp_df[sum_col], errors='coerce') / 100
+            
+            # Групуємо
+            hourly_sales = temp_df.groupby('hour')[sum_col].sum()
+            
+            return hourly_sales
+
+        except Exception as e:
+            st.error(f"Помилка при обробці погодинних продажів: {e}")
+            return pd.DataFrame()import streamlit as st
 import pandas as pd
 from datetime import date
 from modules.api_client import PosterClient
