@@ -1,144 +1,173 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from datetime import date
 
-# Налаштування сторінки
-st.set_page_config(page_title="Poster SaaS Admin", page_icon="🔐", layout="wide")
+# Safe Imports (Dependency Injection pattern)
+try:
+    from modules.db_handler import DatabaseHandler
+except ImportError:
+    st.error("❌ Critical: Modules not found.")
+    st.stop()
 
-# --- AUTH SYSTEM ---
-def check_password():
-    """Проста перевірка пароля."""
-    def password_entered():
-        if st.session_state["password"] == st.secrets.get("admin_password", "admin123"):
-            st.session_state["user_role"] = "Admin"
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # не зберігаємо пароль
-        else:
-            st.session_state["password_correct"] = False
+st.set_page_config(page_title="Poster SQL Analytics", page_icon="🐘", layout="wide")
 
-    if "password_correct" not in st.session_state:
-        # Перший вхід
-        st.text_input("Введіть пароль доступу", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        # Пароль невірний
-        st.text_input("Введіть пароль доступу", type="password", on_change=password_entered, key="password")
-        st.error("😕 Пароль невірний")
-        return False
-    else:
-        # Пароль вірний
+# --- AUTHENTICATION ---
+def check_auth():
+    """Simple Role-Based Access Control."""
+    if "user_role" not in st.session_state:
+        st.session_state["user_role"] = None
+
+    if st.session_state["user_role"]:
         return True
 
-# --- PAGE LOADERS (Fault Tolerance) ---
-def load_dashboard_page():
-    """Безпечне завантаження дашборду."""
-    try:
-        from modules.data_processor import DataProcessor
-        from modules.db_handler import GoogleSheetHandler
-        import plotly.express as px
-
-        st.title("📊 Аналітичний Дашборд")
-        gs = GoogleSheetHandler()
-        processor = DataProcessor()
-        
-        sheet_name = st.session_state.get('sheet_name', "Poster ERP Data")
-
-        if st.button("🔄 Оновити дані"):
-            with st.spinner("Завантаження..."):
-                df = gs.read_data(sheet_name, "Transactions")
-                if not df.empty:
-                    df = processor.prepare_transactions(df)
-                    st.session_state['dash_data'] = df
-        
-        if 'dash_data' in st.session_state:
-            df = st.session_state['dash_data']
-            kpi = processor.calculate_kpi(df)
-            col1, col2 = st.columns(2)
-            col1.metric("Виторг", f"{kpi['revenue']} ₴")
-            col1.metric("Чеки", kpi['checks'])
-            
-            # Графік
-            hourly = processor.get_hourly_sales(df)
-            if not hourly.empty:
-                st.plotly_chart(px.bar(hourly, x='Година', y='Виторг'), use_container_width=True)
+    # Login Form
+    pwd = st.text_input("Enter Password", type="password")
+    if pwd:
+        if pwd == st.secrets["auth"]["admin_password"]:
+            st.session_state["user_role"] = "Admin"
+            st.rerun()
+        elif pwd == st.secrets["auth"]["user_password"]:
+            st.session_state["user_role"] = "User"
+            st.rerun()
         else:
-            st.info("Натисніть кнопку оновлення.")
+            st.error("Invalid password")
+    return False
 
-    except ImportError as e:
-        st.error(f"⚠️ Помилка імпорту модуля: {e}")
-    except Exception as e:
-        st.error(f"⚠️ Критична помилка на сторінці: {e}")
-
-def load_data_lake_page():
-    """Сторінка синхронізації (Data Lake)."""
+# --- FAULT TOLERANT LOADER ---
+def safe_load_page(page_function):
+    """Wraps page logic in a global try-except to prevent app crashes."""
     try:
-        from modules.api_client import PosterClient
-        from modules.db_handler import GoogleSheetHandler
-
-        st.title("💾 Data Lake Synchronization")
-        
-        poster = PosterClient()
-        gs = GoogleSheetHandler()
-
-        sheet_name = st.text_input("Google Sheet Name", value="Poster ERP Data")
-        st.session_state['sheet_name'] = sheet_name # Зберігаємо глобально
-
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Транзакційні дані")
-            d_range = st.date_input("Період", value=(date.today(), date.today()))
-            if st.button("📥 Завантажити Чеки"):
-                if len(d_range) == 2:
-                    data = poster.get_transactions(str(d_range[0]), str(d_range[1]))
-                    if data:
-                        gs.save_transactions(pd.DataFrame(data), sheet_name)
-                        st.success(f"Збережено {len(data)} чеків.")
-
-        with col2:
-            st.subheader("Довідники (Master Data)")
-            if st.button("📥 Завантажити Меню"):
-                data = poster.get_menu()
-                if data:
-                    gs.save_menu(pd.DataFrame(data), sheet_name)
-                    st.success(f"Збережено {len(data)} товарів.")
-            
-            if st.button("📥 Завантажити Категорії"):
-                data = poster.get_categories()
-                if data:
-                    gs.save_categories(pd.DataFrame(data), sheet_name)
-                    st.success(f"Збережено {len(data)} категорій.")
-
+        page_function()
     except Exception as e:
-        st.error(f"⚠️ Data Lake Error: {e}")
+        st.error(f"💥 An unexpected error occurred on this page: {e}")
+        st.info("Try refreshing or contacting support.")
 
-# --- MAIN ROUTER ---
-def main():
-    if not check_password():
+# --- PAGES ---
+
+def page_dashboard():
+    st.title("📊 Business Dashboard")
+    
+    # Init DB only (No API connection here)
+    db = DatabaseHandler()
+    
+    # Load Data
+    with st.spinner("Fetching cached data from SQL..."):
+        df_trans = db.load_data("transactions")
+    
+    if df_trans.empty:
+        st.warning("📭 No data found in Database. Please ask Admin to Sync.")
         return
 
-    # Sidebar Navigation
-    st.sidebar.title(f"User: {st.session_state.get('user_role', 'Guest')}")
-    
-    page = st.sidebar.radio(
-        "Навігація", 
-        ["📊 Дашборд", "💾 Data Lake (Sync)", "⚙️ Налаштування"]
-    )
+    # Data Processing (On the fly)
+    try:
+        # Basic transformations
+        df_trans['date_close'] = pd.to_datetime(df_trans['date_close'])
+        df_trans['payed_sum'] = pd.to_numeric(df_trans['payed_sum'], errors='coerce') / 100.0
+        
+        # Metrics
+        total_rev = df_trans['payed_sum'].sum()
+        total_checks = df_trans['transaction_id'].nunique()
+        
+        m1, m2 = st.columns(2)
+        m1.metric("Total Revenue", f"{total_rev:,.2f} ₴")
+        m2.metric("Total Checks", total_checks)
+        
+        # Visualization
+        st.subheader("Revenue Timeline")
+        hourly_sales = df_trans.groupby(df_trans['date_close'].dt.hour)['payed_sum'].sum().reset_index()
+        hourly_sales.columns = ['Hour', 'Revenue']
+        
+        fig = px.bar(hourly_sales, x='Hour', y='Revenue', title="Sales by Hour")
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error processing data for visualization: {e}")
 
+def page_sync():
+    st.title("⚙️ Data Synchronization (Admin)")
+    st.info("This module connects to Poster API and updates the PostgreSQL Database.")
+    
+    # Safe Import of API Client (Only needed here)
+    try:
+        from modules.api_client import PosterClient
+    except ImportError:
+        st.error("API Client module missing.")
+        return
+
+    # Controls
+    col1, col2 = st.columns(2)
+    with col1:
+        d_range = st.date_input("Sync Period", value=(date.today(), date.today()))
+    
+    with col2:
+        sync_btn = st.button("🚀 Start Full Sync", type="primary")
+
+    if sync_btn and len(d_range) == 2:
+        d_start, d_end = str(d_range[0]), str(d_range[1])
+        
+        api = PosterClient()
+        db = DatabaseHandler()
+        
+        # Sync Process
+        progress = st.progress(0)
+        status_log = st.empty()
+        
+        steps = [
+            ("Transactions", api.get_transactions, [d_start, d_end]),
+            ("Products", api.get_menu_products, []),
+            ("Ingredients", api.get_menu_ingredients, []),
+            ("Employees", api.get_employees, []),
+            ("Supplies", api.get_supplies, [d_start, d_end]),
+            ("Wastes", api.get_wastes, [d_start, d_end]),
+            ("Inventories", api.get_inventories, [d_start, d_end])
+        ]
+        
+        total_steps = len(steps)
+        
+        for i, (name, func, args) in enumerate(steps):
+            status_log.write(f"📥 Fetching {name}...")
+            
+            # Fetch
+            df = func(*args)
+            
+            # Save
+            if not df.empty:
+                success = db.save_data(df, name.lower())
+                if success:
+                    status_log.write(f"✅ {name}: Saved {len(df)} records to DB.")
+                else:
+                    status_log.write(f"❌ {name}: Database save failed.")
+            else:
+                status_log.write(f"⚠️ {name}: API returned no data.")
+            
+            progress.progress((i + 1) / total_steps)
+            
+        status_log.success("🎉 Sync Cycle Completed!")
+
+# --- ROUTER ---
+def main():
+    if not check_auth():
+        return
+
+    # Navigation
+    st.sidebar.title("Navigation")
+    role = st.session_state.get("user_role")
+    
+    pages = {"Dashboard": page_dashboard}
+    
+    if role == "Admin":
+        pages["Data Sync"] = page_sync
+        
+    selection = st.sidebar.radio("Go to", list(pages.keys()))
+    
     st.sidebar.divider()
-    if st.sidebar.button("Вийти"):
-        del st.session_state["password_correct"]
+    if st.sidebar.button("Logout"):
+        st.session_state["user_role"] = None
         st.rerun()
 
-    # Page Routing
-    if page == "📊 Дашборд":
-        load_dashboard_page()
-    elif page == "💾 Data Lake (Sync)":
-        load_data_lake_page()
-    elif page == "⚙️ Налаштування":
-        st.title("⚙️ Налаштування системи")
-        st.write("Тут будуть налаштування API ключів та доступів.")
-        st.json(st.secrets.get("poster", {"status": "No secrets found"}))
+    # Load Selected Page safely
+    safe_load_page(pages[selection])
 
 if __name__ == "__main__":
     main()
