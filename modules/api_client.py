@@ -22,101 +22,57 @@ class PosterClient:
             st.error("❌ API Config Error: Token not found in secrets.")
             st.stop()
 
-    def _fetch_all(self, endpoint: str, params: Dict[str, Any] = None) -> List[Dict]:
+    def _fetch_all(self, endpoint, params=None):
         """
-        Robust Pagination Engine.
-        Fetches ALL pages until data is exhausted.
-        Fixes 'int object has no attribute get' error by strict type checking.
+        Забирає всі сторінки даних, ігноруючи не-dict відповіді від Poster.
         """
-        if params is None: params = {}
-        params["token"] = self.token
-        params["limit"] = 1000
+        if params is None:
+            params = {}
         
-        all_items = []
-        offset = 0
+        params['limit'] = 1000
+        params['offset'] = 0
+        all_data = []
         
-        status = st.empty()
-
         while True:
-            params["offset"] = offset
             try:
-                url = f"{self.BASE_URL}/{endpoint}"
-                response = requests.get(url, params=params, timeout=30)
+                response = requests.get(f"{self.base_url}/{endpoint}", params={**self.base_params, **params})
+                response.raise_for_status()
                 
-                # 1. HTTP Check
-                if response.status_code != 200:
-                    st.warning(f"⚠️ HTTP Error {response.status_code} at {endpoint}")
-                    break
+                data = response.json()
 
-                try:
-                    data = response.json()
-                except ValueError:
-                    st.warning(f"⚠️ Invalid JSON received from {endpoint}")
-                    break
-
-                # 2. IMMEDIATE TYPE CHECK (The Fix)
-                # Якщо API повернуло 0, False або null — це не словник, виходимо одразу.
+                # --- ФІКС КРИТИЧНОГО БАГУ ---
+                # Якщо Poster повернув 0, False, True, або будь-що, що не є словником,
+                # ми просто виходимо з циклу. Це і є помилка 'int' object has no attribute "get".
                 if not isinstance(data, dict):
-                    # Poster часто повертає просто 0, якщо даних немає. Це нормальна поведінка.
-                    if data in [0, False, None]:
+                    break
+                # ---------------------------
+
+                # Шукаємо список даних всередині 'response'
+                result = data.get('response')
+
+                if not result:
+                    break
+                
+                # Якщо result це список (чеки, поставки)
+                if isinstance(result, list):
+                    all_data.extend(result)
+                    if len(result) < 1000: # Остання сторінка
                         break
-                    # Якщо це список (рідко, але буває)
-                    if isinstance(data, list):
-                        all_items.extend(data)
-                        if len(data) < params["limit"]: break
-                        offset += params["limit"]
-                        continue
-                    
-                    st.warning(f"⚠️ Unknown response format from {endpoint}: {type(data)}")
-                    break
-
-                # 3. Тепер ми впевнені, що data — це словник (dict)
-                # Можна безпечно використовувати .get()
                 
-                if "error" in data:
-                    err_msg = data['error'].get('message', 'Unknown Error')
-                    st.warning(f"⚠️ API Error ({endpoint}): {err_msg}")
+                # Якщо це словник (наприклад, налаштування)
+                elif isinstance(result, dict):
+                    all_data.append(result)
                     break
-
-                # Отримуємо поле 'response'
-                raw_response = data.get("response")
-
-                # 4. Перевіряємо вміст 'response'
-                # Він теж може бути 0, False або None
-                if not raw_response or raw_response in [0, False]:
-                    break
-
-                # 5. Нормалізація батчу
-                batch = []
-                if isinstance(raw_response, list):
-                    batch = raw_response
-                elif isinstance(raw_response, dict):
-                    if 'data' in raw_response:
-                        batch = raw_response['data']
-                    else:
-                        batch = list(raw_response.values())
                 
-                if not batch:
-                    break
+                params['offset'] += 1000
+                time.sleep(0.2)
 
-                all_items.extend(batch)
-                status.caption(f"📥 {endpoint}: Fetched {len(all_items)} rows...")
-
-                if len(batch) < params["limit"]:
-                    break
-
-                offset += params["limit"]
-                time.sleep(0.3)
-
-            except requests.exceptions.RequestException as e:
-                st.error(f"❌ Network Error ({endpoint}): {e}")
-                break
             except Exception as e:
-                st.error(f"❌ Unexpected Error ({endpoint}): {e}")
+                # Наприклад, помилка JSON або timeout. Просто зупиняємось.
+                print(f"Error fetching {endpoint}: {e}")
                 break
         
-        status.empty()
-        return all_items
+        return all_data
 
     # --- Public Transformation Methods ---
 
