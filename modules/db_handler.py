@@ -3,11 +3,11 @@ import json
 import pandas as pd
 import streamlit as st
 from oauth2client.service_account import ServiceAccountCredentials
-from gspread_dataframe import set_with_dataframe
+from gspread_dataframe import set_with_dataframe, get_as_dataframe
 
 class GoogleSheetHandler:
     """
-    Клас для роботи з Google Sheets API.
+    Клас для роботи з Google Sheets API (Read/Write).
     """
     
     SCOPE = [
@@ -17,63 +17,61 @@ class GoogleSheetHandler:
 
     def __init__(self):
         try:
-            # Отримуємо JSON-рядок із секретів
-            creds_json_str = st.secrets["google"]["credentials_json"]
+            creds_json = st.secrets["google"]["credentials_json"]
+            creds_dict = json.loads(creds_json)
             
-            # Парсимо рядок у словник
-            creds_dict = json.loads(creds_json_str)
-            
-            # --- ВИПРАВЛЕННЯ КЛЮЧА ---
-            # Streamlit secrets іноді передають \n як літеральні символи, а не як перенос рядка.
-            # Для коректного RSA-парсингу замінюємо їх назад.
             if "private_key" in creds_dict:
                 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
             
-            # Авторизація
             self.creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, self.SCOPE)
             self.client = gspread.authorize(self.creds)
-            
-            # Зберігаємо email бота
             self.service_email = creds_dict.get("client_email", "невідомий")
 
-        except KeyError:
-            st.error("❌ Помилка: Секція [google] або credentials_json не знайдена у secrets.toml")
-            st.stop()
-        except json.JSONDecodeError:
-            st.error("❌ Помилка: Невірний формат JSON у secrets.toml")
-            st.stop()
         except Exception as e:
-            st.error(f"❌ Помилка авторизації Google: {e}")
+            st.error(f"Auth Error: {e}")
             st.stop()
 
-    def write_data(self, df: pd.DataFrame, sheet_name: str) -> bool:
+    def _get_or_create_worksheet(self, spreadsheet, title: str):
+        """Допоміжний метод: отримує аркуш або створює його, якщо немає."""
+        try:
+            return spreadsheet.worksheet(title)
+        except gspread.exceptions.WorksheetNotFound:
+            return spreadsheet.add_worksheet(title=title, rows=1000, cols=20)
+
+    def write_data(self, df: pd.DataFrame, sheet_name: str, tab_name: str = "Sheet1") -> bool:
         """
-        Записує DataFrame у Google Таблицю (перезаписує перший аркуш).
-        
-        :param df: Pandas DataFrame з даними
-        :param sheet_name: Назва існуючої таблиці в Google Drive
-        :return: True, якщо успішно
+        Записує DataFrame у конкретну вкладку (tab_name).
         """
         try:
-            # Відкриваємо таблицю за назвою
             spreadsheet = self.client.open(sheet_name)
+            worksheet = self._get_or_create_worksheet(spreadsheet, tab_name)
             
-            # Обираємо перший аркуш
-            worksheet = spreadsheet.sheet1
-            
-            # Очищаємо старі дані
             worksheet.clear()
-            
-            # Записуємо нові дані разом із заголовками
-            set_with_dataframe(worksheet, df)
-            
+            # Записуємо, перетворюючи все в стрічки для надійності
+            set_with_dataframe(worksheet, df.astype(str))
             return True
-
-        except gspread.exceptions.SpreadsheetNotFound:
-            st.error(f"❌ Таблицю '{sheet_name}' не знайдено.")
-            st.info(f"💡 Переконайтеся, що ви надали доступ редагування для: **{self.service_email}**")
-            return False
         except Exception as e:
-            st.error(f"❌ Помилка при запису в Google Sheets: {e}")
+            st.error(f"Write Error ({tab_name}): {e}")
             return False
+
+    def read_data(self, sheet_name: str, tab_name: str = "Sheet1") -> pd.DataFrame:
+        """
+        Читає дані з вкладки у DataFrame.
+        """
+        try:
+            spreadsheet = self.client.open(sheet_name)
+            worksheet = spreadsheet.worksheet(tab_name)
             
+            # Читаємо всі дані
+            data = worksheet.get_all_records()
+            
+            if not data:
+                return pd.DataFrame()
+                
+            return pd.DataFrame(data)
+        except gspread.exceptions.WorksheetNotFound:
+            st.warning(f"Вкладку '{tab_name}' ще не створено.")
+            return pd.DataFrame()
+        except Exception as e:
+            st.error(f"Read Error ({tab_name}): {e}")
+            return pd.DataFrame()
