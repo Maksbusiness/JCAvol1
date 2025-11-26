@@ -2,5 +2,5 @@ streamlit
 pandas
 requests
 sqlalchemy
-psycopg2-binary
+pg8000
 plotly
