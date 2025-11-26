@@ -1,41 +1,79 @@
 import gspread
 import json
+import pandas as pd
 import streamlit as st
-from google.oauth2.service_account import Credentials # Нова бібліотека
+from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import set_with_dataframe
 
 class GoogleSheetHandler:
-    def __init__(self):
-        # Отримуємо JSON-строку
-        json_str = st.secrets["google"]["credentials_json"]
-        
-        # Парсимо рядок у словник
-        creds_dict = json.loads(json_str)
-        
-        # Визначаємо права доступу
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        
-        # Створюємо об'єкт авторизації (новий метод)
-        self.creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-        
-        # Авторизуємо gspread
-        self.client = gspread.authorize(self.creds)
+    """
+    Клас для роботи з Google Sheets API.
+    """
+    
+    SCOPE = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
 
-    def write_data(self, df, sheet_name):
+    def __init__(self):
         try:
-            # Відкриваємо таблицю
+            # Отримуємо JSON-рядок із секретів
+            creds_json_str = st.secrets["google"]["credentials_json"]
+            
+            # Парсимо рядок у словник
+            creds_dict = json.loads(creds_json_str)
+            
+            # --- ВИПРАВЛЕННЯ КЛЮЧА ---
+            # Streamlit secrets іноді передають \n як літеральні символи, а не як перенос рядка.
+            # Для коректного RSA-парсингу замінюємо їх назад.
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            
+            # Авторизація
+            self.creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, self.SCOPE)
+            self.client = gspread.authorize(self.creds)
+            
+            # Зберігаємо email бота
+            self.service_email = creds_dict.get("client_email", "невідомий")
+
+        except KeyError:
+            st.error("❌ Помилка: Секція [google] або credentials_json не знайдена у secrets.toml")
+            st.stop()
+        except json.JSONDecodeError:
+            st.error("❌ Помилка: Невірний формат JSON у secrets.toml")
+            st.stop()
+        except Exception as e:
+            st.error(f"❌ Помилка авторизації Google: {e}")
+            st.stop()
+
+    def write_data(self, df: pd.DataFrame, sheet_name: str) -> bool:
+        """
+        Записує DataFrame у Google Таблицю (перезаписує перший аркуш).
+        
+        :param df: Pandas DataFrame з даними
+        :param sheet_name: Назва існуючої таблиці в Google Drive
+        :return: True, якщо успішно
+        """
+        try:
+            # Відкриваємо таблицю за назвою
             spreadsheet = self.client.open(sheet_name)
+            
+            # Обираємо перший аркуш
             worksheet = spreadsheet.sheet1
             
-            # Очищаємо і пишемо
+            # Очищаємо старі дані
             worksheet.clear()
-            set_with_dataframe(worksheet, df)
-            return True, "Успішно збережено!"
             
+            # Записуємо нові дані разом із заголовками
+            set_with_dataframe(worksheet, df)
+            
+            return True
+
         except gspread.exceptions.SpreadsheetNotFound:
-            return False, f"Таблицю '{sheet_name}' не знайдено. Перевірте назву."
+            st.error(f"❌ Таблицю '{sheet_name}' не знайдено.")
+            st.info(f"💡 Переконайтеся, що ви надали доступ редагування для: **{self.service_email}**")
+            return False
         except Exception as e:
-            return False, f"Помилка запису: {e}"
+            st.error(f"❌ Помилка при запису в Google Sheets: {e}")
+            return False
+            
