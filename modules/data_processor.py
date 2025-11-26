@@ -1,59 +1,67 @@
 import pandas as pd
 import streamlit as st
+import ast  # Бібліотека для безпечного парсингу стрічок "[...]" у список
 
 class DataProcessor:
     """
-    Клас для обробки та агрегації даних для дашборду.
+    Обробка даних, отриманих з БД (Google Sheets).
     """
+
+    def _safe_literal_eval(self, val):
+        """Перетворює рядок списку назад у список Python."""
+        if pd.isna(val) or val == "":
+            return []
+        if isinstance(val, list):
+            return val
+        try:
+            return ast.literal_eval(val)
+        except (ValueError, SyntaxError):
+            return []
 
     def process_top_products(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Повертає Топ-7 товарів.
-        Логіка: Explode списку продуктів -> Нормалізація JSON -> Групування.
+        Топ товарів. Враховує, що дані прийшли з Google Sheets (все - текст).
         """
-        # Перевірки на цілісність даних
         if df.empty or 'products' not in df.columns:
             return pd.DataFrame()
 
         try:
-            # 1. Розгортаємо список продуктів (один рядок = один товар у чеку)
-            # Використовуємо dropna, бо можуть бути сервісні чеки без товарів
-            df_exploded = df.explode('products').dropna(subset=['products'])
-            
+            # Створюємо копію
+            temp_df = df.copy()
+
+            # 1. Відновлюємо список продуктів зі стрічки
+            # Google Sheet зберігає: "[{'id':1, ...}, {'id':2...}]" як текст
+            temp_df['products'] = temp_df['products'].apply(self._safe_literal_eval)
+
+            # 2. Explode
+            df_exploded = temp_df.explode('products').dropna(subset=['products'])
             if df_exploded.empty:
                 return pd.DataFrame()
 
-            # 2. Нормалізація: перетворюємо колонку словників у повноцінний DataFrame
-            # product_details матиме колонки: product_id, product_name, count, payed_sum і т.д.
+            # 3. Normalize
             product_details = pd.json_normalize(df_exploded['products'])
 
-            # 3. Визначаємо правильні назви колонок (Poster іноді змінює ключі)
             name_col = 'product_name' if 'product_name' in product_details.columns else 'name'
-            
             if name_col not in product_details.columns:
                 return pd.DataFrame()
 
-            # 4. Конвертація числових типів
-            # payed_sum у товарах теж в копійках
+            # 4. Конвертація чисел (обов'язкова після читання з Sheets)
             product_details['payed_sum'] = pd.to_numeric(product_details.get('payed_sum', 0), errors='coerce') / 100
             product_details['count'] = pd.to_numeric(product_details.get('count', 0), errors='coerce')
 
-            # 5. Групування
+            # 5. Group & Sort
             top_products = product_details.groupby(name_col)[['payed_sum', 'count']].sum()
-            
-            # 6. Сортування та вибірка топ-7
             top_products = top_products.sort_values(by='payed_sum', ascending=False).head(7)
             
-            # Повертаємо index в колонку, щоб Plotly міг брати назви
             return top_products.reset_index()
 
         except Exception as e:
-            st.error(f"Помилка при обробці товарів: {e}")
+            st.error(f"Processor Error (Products): {e}")
             return pd.DataFrame()
 
     def process_hourly_sales(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Агрегує продажі по годинах для графіка.
+        Погодинні продажі.
         """
         if df.empty or 'date_close' not in df.columns:
             return pd.DataFrame()
@@ -61,26 +69,28 @@ class DataProcessor:
         try:
             temp_df = df.copy()
 
-            # Конвертуємо час з мілісекунд
-            temp_df['date_close'] = pd.to_datetime(temp_df['date_close'], unit='ms')
+            # --- ВИПРАВЛЕННЯ ДАТИ ---
+            # Прибираємо unit='ms', дозволяємо Pandas самому розібратися
+            temp_df['date_close'] = pd.to_datetime(temp_df['date_close'], errors='coerce')
             
-            # Витягуємо годину
+            # Видаляємо некоректні дати
+            temp_df = temp_df.dropna(subset=['date_close'])
+            
+            # Година
             temp_df['hour'] = temp_df['date_close'].dt.hour
             
-            # Визначаємо колонку суми
+            # --- ВИПРАВЛЕННЯ ЧИСЕЛ ---
             sum_col = 'payed_sum' if 'payed_sum' in temp_df.columns else 'sum'
             
-            # Конвертуємо у гривні
+            # З Google Sheets числа можуть прийти як "12500" (str)
             temp_df[sum_col] = pd.to_numeric(temp_df.get(sum_col, 0), errors='coerce') / 100
             
-            # Групуємо (reset_index важливий для Plotly)
+            # Групування
             hourly_sales = temp_df.groupby('hour')[sum_col].sum().reset_index()
-            
-            # Перейменовуємо колонки для краси
             hourly_sales.columns = ['Година', 'Виторг']
             
             return hourly_sales
 
         except Exception as e:
-            st.error(f"Помилка при обробці годин: {e}")
+            st.error(f"Processor Error (Hourly): {e}")
             return pd.DataFrame()
