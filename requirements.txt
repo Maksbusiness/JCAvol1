@@ -1,7 +1,6 @@
 streamlit
 pandas
 requests
-numpy
 gspread
-oauth2client
+google-auth
 gspread-dataframe
