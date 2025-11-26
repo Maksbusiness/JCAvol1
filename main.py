@@ -1,130 +1,165 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from datetime import date
 
 # Імпорти модулів
-# Переконайтеся, що ваші файли називаються саме так:
-# modules/api_client.py
-# modules/db_handler.py
-# modules/data_processor.py
 from modules.api_client import PosterClient
 from modules.db_handler import GoogleSheetHandler
 from modules.data_processor import DataProcessor
 
 # Налаштування сторінки
 st.set_page_config(
-    page_title="Poster Analytics Dashboard",
-    page_icon="📊",
-    layout="wide"
+    page_title="Poster Analytics Pro",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-def main():
-    st.title("📊 Poster Analytics Dashboard")
+# --- CSS STYLING (Card Design) ---
+st.markdown("""
+    <style>
+    /* Стиль для метрик-карток */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        border: 1px solid #f0f2f6;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    }
+    /* Заголовки графіків */
+    .chart-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # Ініціалізація класів
-    # Якщо тут виникає помилка, перевірте modules/api_client.py та secrets.toml
+def main():
+    st.title("📈 Poster Analytics Pro")
+
+    # Ініціалізація
     poster_client = PosterClient()
     data_processor = DataProcessor()
 
     # --- САЙДБАР ---
-    st.sidebar.header("1. Отримання даних")
+    st.sidebar.header("Налаштування")
     
-    # Вибір дати
     selected_date = st.sidebar.date_input(
-        "Оберіть період",
+        "Період аналізу",
         value=(date.today(), date.today()),
         max_value=date.today()
     )
 
-    # Логіка завантаження
-    if st.sidebar.button("Завантажити з Poster", type="primary"):
-        # Перевірка, що обрано саме діапазон (start, end)
+    if st.sidebar.button("🔄 Оновити дані", type="primary"):
         if isinstance(selected_date, tuple) and len(selected_date) == 2:
             start_date, end_date = selected_date
-            
-            with st.spinner("Отримання даних з Poster..."):
-                date_from_str = start_date.strftime("%Y-%m-%d")
-                date_to_str = end_date.strftime("%Y-%m-%d")
-
-                # Виклик API
-                transactions = poster_client.get_transactions(date_from_str, date_to_str)
-
+            with st.spinner("Завантаження даних з Poster API..."):
+                transactions = poster_client.get_transactions(
+                    start_date.strftime("%Y-%m-%d"), 
+                    end_date.strftime("%Y-%m-%d")
+                )
                 if transactions:
-                    df = pd.DataFrame(transactions)
-                    # Зберігаємо в сесії (кеш)
-                    st.session_state['df'] = df
-                    st.success(f"Завантажено {len(transactions)} записів!")
+                    st.session_state['df'] = pd.DataFrame(transactions)
+                    st.toast(f"Завантажено {len(transactions)} чеків!", icon="✅")
                 else:
-                    st.warning("Даних не знайдено.")
+                    st.error("Даних не знайдено за цей період.")
         else:
-            st.error("Будь ласка, оберіть коректний діапазон дат (початок і кінець).")
+            st.warning("Оберіть повний діапазон дат.")
 
-    # --- ОСНОВНА ЧАСТИНА ---
-    # Перевіряємо, чи є дані в сесії
+    # --- ГОЛОВНИЙ ЕКРАН ---
     if 'df' in st.session_state and not st.session_state['df'].empty:
         df = st.session_state['df']
         
-        # Вкладки
-        tab1, tab2 = st.tabs(["📊 Дашборд", "📋 Сирі дані"])
+        # 1. Підготовка загальних метрик
+        # Конвертуємо загальну суму чеків (вона в df в копійках)
+        total_sum = pd.to_numeric(df.get('payed_sum', 0), errors='coerce').sum() / 100
+        total_count = len(df)
+        avg_check = total_sum / total_count if total_count > 0 else 0
+        
+        # Обробка топ-товару для метрики
+        top_products_df = data_processor.process_top_products(df)
+        top_item_name = "Немає даних"
+        if not top_products_df.empty:
+            # Беремо назву першого товару (ім'я колонки може бути product_name або name)
+            top_item_name = top_products_df.iloc[0, 0] # Перша колонка, перший рядок
 
-        # === Вкладка 1: Дашборд ===
-        with tab1:
-            st.subheader("Аналітика")
-            col1, col2 = st.columns(2)
+        # 2. ВІДОБРАЖЕННЯ МЕТРИК (КАРТКИ)
+        st.markdown("### 📊 Ключові показники")
+        m1, m2, m3, m4 = st.columns(4)
+        
+        m1.metric("Загальний виторг", f"{total_sum:,.0f} ₴")
+        m2.metric("Кількість чеків", f"{total_count}")
+        m3.metric("Середній чек", f"{avg_check:.0f} ₴")
+        m4.metric("Топ товар", top_item_name)
 
-            # Графік 1: Погодинні продажі
-            with col1:
-                st.markdown("**💸 Виторг по годинах**")
-                try:
-                    hourly_sales = data_processor.process_hourly_sales(df)
-                    if not hourly_sales.empty:
-                        st.line_chart(hourly_sales)
-                    else:
-                        st.info("Немає даних для графіку.")
-                except Exception as e:
-                    st.error(f"Помилка побудови графіку годин: {e}")
+        st.divider()
 
-            # Графік 2: Топ товарів
-            with col2:
-                st.markdown("**🏆 Топ-10 товарів**")
-                try:
-                    top_products = data_processor.process_top_products(df)
-                    if not top_products.empty:
-                        # Відображаємо тільки колонку суми для графіка
-                        st.bar_chart(top_products['payed_sum'])
-                    else:
-                        st.info("Немає даних про товари (перевірте `include_products=1` в api_client.py).")
-                except Exception as e:
-                    st.error(f"Помилка побудови графіку товарів: {e}")
+        # 3. ГРАФІКИ
+        col_charts_1, col_charts_2 = st.columns([2, 1])
 
-        # === Вкладка 2: Таблиця та Експорт ===
-        with tab2:
-            st.subheader("📋 Детальна таблиця")
+        # Графік 1: Погодинна динаміка (Bar Chart)
+        with col_charts_1:
+            st.markdown('<div class="chart-title">💸 Динаміка продажів по годинах</div>', unsafe_allow_html=True)
+            hourly_df = data_processor.process_hourly_sales(df)
+            
+            if not hourly_df.empty:
+                fig_bar = px.bar(
+                    hourly_df, 
+                    x='Година', 
+                    y='Виторг',
+                    text_auto='.2s', # Скорочений формат чисел на стовпчиках
+                    color='Виторг',  # Градієнт
+                    color_continuous_scale='Blues'
+                )
+                fig_bar.update_layout(
+                    xaxis=dict(tickmode='linear', dtick=1), # Показувати кожну годину
+                    showlegend=False,
+                    height=400,
+                    margin=dict(l=0, r=0, t=0, b=0)
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+            else:
+                st.info("Немає даних для графіка.")
+
+        # Графік 2: Топ товарів (Donut Chart)
+        with col_charts_2:
+            st.markdown('<div class="chart-title">🏆 Топ-7 товарів (частка)</div>', unsafe_allow_html=True)
+            
+            if not top_products_df.empty:
+                # Визначаємо назву колонки з іменами (перша колонка)
+                name_col = top_products_df.columns[0]
+                
+                fig_pie = px.pie(
+                    top_products_df, 
+                    values='payed_sum', 
+                    names=name_col,
+                    hole=0.6, # Робить "пончик"
+                    color_discrete_sequence=px.colors.qualitative.Pastel
+                )
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                fig_pie.update_layout(
+                    showlegend=False,
+                    height=400,
+                    margin=dict(l=0, r=0, t=0, b=0)
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.warning("Товари не знайдено.")
+
+        # 4. ТАБЛИЦЯ ТА ЕКСПОРТ (в експандері, щоб не заважало)
+        with st.expander("📋 Детальна таблиця та Експорт в Google Sheets"):
             st.dataframe(df, use_container_width=True)
-
-            st.divider()
-            st.subheader("💾 Експорт в Google Sheets")
-
-            col_exp_1, col_exp_2 = st.columns([2, 1])
             
-            with col_exp_1:
-                sheet_name = st.text_input("Назва Google Таблиці", value="Poster Data")
+            col_exp_1, col_exp_2 = st.columns([3, 1])
+            sheet_name = col_exp_1.text_input("Назва Google Таблиці", value="Poster Report")
             
-            with col_exp_2:
-                st.write("") 
-                st.write("") 
-                if st.button("Записати в таблицю"):
-                    with st.spinner("З'єднання з Google Sheets..."):
-                        gs_handler = GoogleSheetHandler()
-                        
-                        # Конвертуємо об'єкти в стрічки для сумісності з Google Sheets
-                        df_to_save = df.astype(str)
-                        
-                        success = gs_handler.write_data(df_to_save, sheet_name)
-                        
-                        if success:
-                            st.success(f"Успішно записано в '{sheet_name}'!")
-                            st.balloons()
+            if col_exp_2.button("💾 Зберегти"):
+                gs = GoogleSheetHandler()
+                if gs.write_data(df.astype(str), sheet_name):
+                    st.success("Збережено!")
 
 if __name__ == "__main__":
     main()
