@@ -70,7 +70,7 @@ class PosterClient:
             "date_from": date_from,
             "date_to": date_to,
             "type": "waiters", # Можливо знадобиться змінити залежно від типу чеків
-            "include_products": 0 # Поки не вантажимо товари для швидкості
+            "include_products": 1 # Поки не вантажимо товари для швидкості
         }
         
         # Викликаємо endpoint
