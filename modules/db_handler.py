@@ -8,19 +8,14 @@ from gspread_dataframe import set_with_dataframe
 class GoogleSheetHandler:
     """
     Клас для роботи з Google Sheets.
-    Відповідає за I/O операції (читання/запис).
     """
     
-    SCOPE = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
+    SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
     def __init__(self):
         try:
             creds_json = st.secrets["google"]["credentials_json"]
             creds_dict = json.loads(creds_json)
-            
             if "private_key" in creds_dict:
                 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
             
@@ -31,52 +26,45 @@ class GoogleSheetHandler:
             st.error(f"Google Auth Error: {e}")
             st.stop()
 
-    def _get_worksheet(self, sheet_name: str, tab_name: str, create_if_missing: bool = False):
-        """Отримує або створює аркуш."""
+    def _write_generic(self, df: pd.DataFrame, sheet_name: str, tab_name: str) -> bool:
+        """Внутрішній метод запису."""
         try:
-            spreadsheet = self.client.open(sheet_name)
-        except gspread.exceptions.SpreadsheetNotFound:
-            st.error(f"❌ Таблицю '{sheet_name}' не знайдено на Google Drive.")
-            return None
-
-        try:
-            return spreadsheet.worksheet(tab_name)
-        except gspread.exceptions.WorksheetNotFound:
-            if create_if_missing:
-                return spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=20)
-            return None
-
-    def write_data(self, df: pd.DataFrame, sheet_name: str, tab_name: str) -> bool:
-        """
-        Записує DataFrame у вкладку.
-        Конвертує ВСЕ в рядки перед записом для уникнення JSON-помилок.
-        """
-        try:
-            worksheet = self._get_worksheet(sheet_name, tab_name, create_if_missing=True)
-            if not worksheet:
+            try:
+                spreadsheet = self.client.open(sheet_name)
+            except gspread.SpreadsheetNotFound:
+                st.error(f"Таблицю '{sheet_name}' не знайдено.")
                 return False
 
+            try:
+                worksheet = spreadsheet.worksheet(tab_name)
+            except gspread.WorksheetNotFound:
+                worksheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=20)
+
             worksheet.clear()
-            
-            # --- CRITICAL FIX: Serialization ---
-            # Перетворюємо складні об'єкти (списки, дати, числа) на текст
-            df_str = df.astype(str)
-            
-            set_with_dataframe(worksheet, df_str)
+            # Конвертуємо все в string для надійності
+            set_with_dataframe(worksheet, df.astype(str))
             return True
         except Exception as e:
-            st.error(f"Write Error ({tab_name}): {e}")
+            st.error(f"Error writing to {tab_name}: {e}")
             return False
 
+    # --- Specialized Savers ---
+
+    def save_transactions(self, df: pd.DataFrame, sheet_name: str) -> bool:
+        return self._write_generic(df, sheet_name, "Transactions")
+
+    def save_menu(self, df: pd.DataFrame, sheet_name: str) -> bool:
+        return self._write_generic(df, sheet_name, "Menu")
+
+    def save_categories(self, df: pd.DataFrame, sheet_name: str) -> bool:
+        return self._write_generic(df, sheet_name, "Categories")
+        
     def read_data(self, sheet_name: str, tab_name: str) -> pd.DataFrame:
-        """Читає дані з вкладки."""
+        """Читання даних."""
         try:
-            worksheet = self._get_worksheet(sheet_name, tab_name)
-            if not worksheet:
-                return pd.DataFrame() # Повертаємо пустий DF, якщо вкладки немає
-            
+            spreadsheet = self.client.open(sheet_name)
+            worksheet = spreadsheet.worksheet(tab_name)
             data = worksheet.get_all_records()
             return pd.DataFrame(data)
-        except Exception as e:
-            st.error(f"Read Error ({tab_name}): {e}")
+        except Exception:
             return pd.DataFrame()
