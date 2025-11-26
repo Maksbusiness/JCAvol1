@@ -7,9 +7,9 @@ from modules.api_client import PosterClient
 from modules.db_handler import GoogleSheetHandler
 from modules.data_processor import DataProcessor
 
-st.set_page_config(page_title="Poster Analytics V1.0", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Poster ERP Sync", page_icon="🔄", layout="wide")
 
-# CSS: Чорний текст для карток
+# Стилі
 st.markdown("""
     <style>
     div[data-testid="stMetric"] {
@@ -25,164 +25,150 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 def main():
-    st.title("🚀 Poster ERP Analytics")
+    st.title("🔄 Poster ERP Connector")
 
-    # Ініціалізація
     poster = PosterClient()
     gs = GoogleSheetHandler()
     processor = DataProcessor()
 
-    # Вкладки
     tab_sync, tab_analytics = st.tabs(["⚙️ Синхронізація (ERP)", "📊 Аналітика"])
 
-    # ==========================================
-    # 1. СИНХРОНІЗАЦІЯ (SYNC)
-    # ==========================================
+    # ==========================
+    # Вкл 1: СИНХРОНІЗАЦІЯ
+    # ==========================
     with tab_sync:
-        st.header("Оновлення бази даних")
-        st.info("Цей модуль завантажує дані з Poster API та зберігає їх у Google Sheets.")
+        st.header("Оновлення даних")
+        st.info("Виберіть дані для завантаження в Google Sheets.")
         
         col1, col2 = st.columns([1, 2])
+        
         with col1:
             sheet_name = st.text_input("Назва Google Таблиці", value="Poster ERP Data")
             
             entities = st.multiselect(
-                "Оберіть сутності для оновлення:",
-                ["Чеки (Transactions)", "Товари (Menu)", "Інгредієнти", "Постачальники", "Постачання"],
-                default=["Чеки (Transactions)"]
+                "Сутності:",
+                ["Чеки", "Товари", "Інгредієнти", "Постачальники", "Постачання"],
+                default=["Чеки"]
             )
             
-            date_range_sync = st.date_input(
-                "Період (для документів)",
+            date_range = st.date_input(
+                "Період вибірки",
                 value=(date.today(), date.today()),
                 max_value=date.today()
             )
             
-            btn_sync = st.button("🚀 Запустити", type="primary")
+            start_btn = st.button("🚀 Запустити", type="primary")
 
         with col2:
-            if btn_sync:
-                if len(date_range_sync) != 2:
-                    st.error("Оберіть дату початку та кінця.")
-                else:
-                    d_start = date_range_sync[0].strftime("%Y-%m-%d")
-                    d_end = date_range_sync[1].strftime("%Y-%m-%d")
+            if start_btn:
+                # Валідація дати
+                if not (isinstance(date_range, tuple) and len(date_range) == 2):
+                    st.error("Оберіть повний діапазон дат.")
+                    st.stop()
+                
+                d_start = date_range[0].strftime("%Y-%m-%d")
+                d_end = date_range[1].strftime("%Y-%m-%d")
+
+                # Використовуємо st.status для групування логів
+                with st.status("⏳ Виконується синхронізація...", expanded=True) as status:
                     
-                    log = st.container()
-                    
-                    # --- SYNC LOGIC ---
-                    
-                    # 1. Transactions
-                    if "Чеки (Transactions)" in entities:
+                    # 1. ЧЕКИ
+                    if "Чеки" in entities:
+                        st.write("📥 Завантажую чеки...")
                         data = poster.get_transactions(d_start, d_end)
                         if data:
-                            gs.write_data(pd.DataFrame(data), sheet_name, "Transactions")
-                            log.success(f"✅ Чеки: {len(data)} завантажено.")
+                            df = pd.DataFrame(data)
+                            gs.write_data(df.astype(str), sheet_name, "Transactions")
+                            st.write(f"✅ Чеки: {len(data)} записів.")
                         else:
-                            log.warning("⚠️ Чеки: немає даних.")
+                            st.write("⚠️ Чеки: даних не знайдено.")
 
-                    # 2. Products
-                    if "Товари (Menu)" in entities:
+                    # 2. ТОВАРИ
+                    if "Товари" in entities:
+                        st.write("📥 Завантажую меню...")
                         data = poster.get_products()
                         if data:
-                            gs.write_data(pd.DataFrame(data), sheet_name, "Products")
-                            log.success(f"✅ Товари: {len(data)} завантажено.")
+                            df = pd.DataFrame(data)
+                            gs.write_data(df.astype(str), sheet_name, "Products")
+                            st.write(f"✅ Товари: {len(data)} записів.")
                     
-                    # 3. Ingredients
+                    # 3. ІНГРЕДІЄНТИ
                     if "Інгредієнти" in entities:
+                        st.write("📥 Завантажую інгредієнти...")
                         data = poster.get_ingredients()
                         if data:
-                            gs.write_data(pd.DataFrame(data), sheet_name, "Ingredients")
-                            log.success(f"✅ Інгредієнти: {len(data)} завантажено.")
+                            df = pd.DataFrame(data)
+                            gs.write_data(df.astype(str), sheet_name, "Ingredients")
+                            st.write(f"✅ Інгредієнти: {len(data)} записів.")
 
-                    # 4. Suppliers
+                    # 4. ПОСТАЧАЛЬНИКИ
                     if "Постачальники" in entities:
+                        st.write("📥 Завантажую постачальників...")
                         data = poster.get_suppliers()
                         if data:
-                            gs.write_data(pd.DataFrame(data), sheet_name, "Suppliers")
-                            log.success(f"✅ Постачальники: {len(data)} завантажено.")
+                            df = pd.DataFrame(data)
+                            gs.write_data(df.astype(str), sheet_name, "Suppliers")
+                            st.write(f"✅ Постачальники: {len(data)} записів.")
 
-                    # 5. Supplies
+                    # 5. ПОСТАЧАННЯ
                     if "Постачання" in entities:
+                        st.write("📥 Завантажую накладні...")
                         data = poster.get_supplies(d_start, d_end)
                         if data:
-                            gs.write_data(pd.DataFrame(data), sheet_name, "Supplies")
-                            log.success(f"✅ Постачання: {len(data)} завантажено.")
+                            df = pd.DataFrame(data)
+                            gs.write_data(df.astype(str), sheet_name, "Supplies")
+                            st.write(f"✅ Постачання: {len(data)} записів.")
 
-    # ==========================================
-    # 2. АНАЛІТИКА (ANALYTICS)
-    # ==========================================
+                    status.update(label="🎉 Синхронізацію завершено!", state="complete", expanded=False)
+                
+                st.success("Дані успішно збережено в Google Sheets!")
+
+    # ==========================
+    # Вкл 2: АНАЛІТИКА
+    # ==========================
     with tab_analytics:
-        st.header("Дашборд продажів")
+        st.header("Аналітика продажів")
         
-        # Завантаження даних
-        if st.button("🔄 Оновити з Google Sheets"):
-            with st.spinner("Читання бази даних..."):
+        if st.button("🔄 Завантажити з БД"):
+            with st.spinner("Зчитування даних..."):
                 raw_df = gs.read_data(sheet_name, "Transactions")
                 if not raw_df.empty:
-                    # Попередня обробка (типи, гроші, статус)
                     clean_df = processor.prepare_transactions(raw_df)
-                    st.session_state['clean_data'] = clean_df
-                    st.toast("Дані успішно оновлено!", icon="🎉")
+                    st.session_state['data'] = clean_df
                 else:
-                    st.error("Вкладка 'Transactions' порожня або не знайдена.")
+                    st.warning("Таблиця 'Transactions' порожня.")
 
         st.divider()
 
-        # Відображення
-        if 'clean_data' in st.session_state:
-            df = st.session_state['clean_data']
+        if 'data' in st.session_state:
+            df = st.session_state['data']
             
-            # Фільтр дат для відображення
-            min_date = df['date_close'].min().date()
-            max_date = df['date_close'].max().date()
+            # Фільтри
+            d_min = df['date_close'].min().date()
+            d_max = df['date_close'].max().date()
             
-            date_filter = st.date_input(
-                "Фільтр періоду",
-                value=(min_date, max_date),
-                min_value=min_date,
-                max_value=max_date
-            )
+            filter_range = st.date_input("Період звіту", value=(d_min, d_max), min_value=d_min, max_value=d_max)
             
-            # Фільтруємо вже чисті дані
-            filtered_df = processor.get_filtered_data(df, date_filter)
+            # Обробка та відображення
+            filtered_df = processor.get_filtered_data(df, filter_range)
+            kpi = processor.calculate_kpi(filtered_df)
             
-            # KPI
-            metrics = processor.calculate_kpi(filtered_df)
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Виторг", f"{kpi['revenue']:,.2f} ₴")
+            k2.metric("Чеки", kpi['checks'])
+            k3.metric("Сер. чек", f"{kpi['avg_check']:.2f} ₴")
             
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Виторг (Netto)", f"{metrics['revenue']:,.2f} ₴")
-            m2.metric("Кількість чеків", f"{metrics['checks']}")
-            m3.metric("Середній чек", f"{metrics['avg_check']:.2f} ₴")
-            
-            # Charts
-            col_chart1, col_chart2 = st.columns([2, 1])
-            
-            with col_chart1:
-                st.subheader("Динаміка по годинах")
-                hourly = processor.get_hourly_sales(filtered_df)
-                if not hourly.empty:
-                    fig = px.bar(hourly, x='Година', y='Виторг', color='Виторг')
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("Немає даних для графіка.")
-
-            with col_chart2:
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.subheader("Динаміка")
+                h_df = processor.get_hourly_sales(filtered_df)
+                if not h_df.empty:
+                    st.plotly_chart(px.bar(h_df, x='Година', y='Виторг'), use_container_width=True)
+            with c2:
                 st.subheader("Топ товарів")
-                top_prods = processor.get_top_products(filtered_df)
-                if not top_prods.empty:
-                    fig_pie = px.pie(
-                        top_prods, 
-                        values='real_sum', 
-                        names=top_prods.columns[0], 
-                        hole=0.6
-                    )
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                else:
-                    st.info("Товари не знайдено.")
-
-        else:
-            st.info("👈 Натисніть 'Оновити з Google Sheets', щоб побудувати звіт.")
+                top_df = processor.get_top_products(filtered_df)
+                if not top_df.empty:
+                    st.plotly_chart(px.pie(top_df, values='real_sum', names=top_df.columns[0], hole=0.5), use_container_width=True)
 
 if __name__ == "__main__":
     main()
