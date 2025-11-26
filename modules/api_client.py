@@ -19,7 +19,7 @@ class PosterClient:
 
     def make_request(self, endpoint: str, params: Dict[str, Any] = None) -> Optional[Dict | List]:
         """
-        Універсальний метод для запитів до API.
+        Універсальний метод запиту.
         """
         if params is None:
             params = {}
@@ -28,47 +28,58 @@ class PosterClient:
         url = f"{self.BASE_URL}/{endpoint}"
         
         try:
-            response = requests.get(url, params=params, timeout=15)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             
             data = response.json()
             
             if "error" in data:
-                st.error(f"⚠️ Помилка API Poster ({data['error'].get('code')}): {data['error'].get('message')}")
+                st.error(f"⚠️ API Error ({endpoint}): {data['error'].get('message')}")
                 return None
                 
             return data.get("response", data)
 
-        except requests.exceptions.RequestException as e:
-            st.error(f"❌ Мережева помилка: {e}")
-            return None
-        except json.JSONDecodeError:
-            st.error("❌ Помилка: Невалідний JSON від API")
+        except Exception as e:
+            st.error(f"❌ Connection Error: {e}")
             return None
 
     def get_transactions(self, date_from: str, date_to: str) -> List[Dict]:
         """
-        Отримання списку транзакцій з товарами.
+        Отримання чеків (з товарами).
         """
         params = {
             "date_from": date_from,
             "date_to": date_to,
-            "type": "waiters",
-            "include_products": 1,  # <--- ВМИКАЄМО ТОВАРИ
-            "status": 2  # Беремо тільки закриті чеки (опціонально)
+            "include_products": 1,
+            "status": 2
         }
-        
-        # Використовуємо transactions.getTransactions замість dash, 
-        # бо він дає кращу деталізацію товарів
         result = self.make_request("transactions.getTransactions", params)
         
-        if result is None:
-            return []
-            
-        if isinstance(result, list):
-            return result
-        elif isinstance(result, dict):
-            # Обробка різних форматів відповіді Poster
-            return list(result.values()) if not result.get('data') else result['data']
-            
+        # Стандартна обробка результату Poster
+        if isinstance(result, list): return result
+        if isinstance(result, dict): return result.get('data', [])
+        return []
+
+    def get_menu_products(self) -> List[Dict]:
+        """
+        Отримання списку всіх товарів меню.
+        """
+        result = self.make_request("menu.getProducts")
+        
+        if isinstance(result, list): return result
+        if isinstance(result, dict): return result.get('data', [])
+        return []
+
+    def get_supplies(self, date_from: str, date_to: str) -> List[Dict]:
+        """
+        Отримання поставок (заглушка або реальний запит).
+        """
+        params = {
+            "date_from": date_from,
+            "date_to": date_to
+        }
+        result = self.make_request("storage.getSupplies", params)
+        
+        if isinstance(result, list): return result
+        if isinstance(result, dict): return result.get('data', [])
         return []
